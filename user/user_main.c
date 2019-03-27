@@ -9,7 +9,7 @@
 #include "info.h"
 #include "app_config.h"
 #include "httpServer.h"
-
+#include "httpClient.h"
 
 static os_timer_t wait_timer;
 
@@ -19,40 +19,50 @@ static os_timer_t wait_timer;
 #define SET_PAGE 		"POST /set"
 #define SET_CONTENT 	"<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"description\" content=\"Wifi Configration\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>Wifi Configration</title></head><body><h1>Wifi Configration</h1><p>All set. Device is going to reboot now.</p></body></html>"
 
+//10 second between checks
+#define TASK_WAIT       10000
 
-#define RED_API 		"GET /ampel/red"
-#define RED_LED 		6
+#define RED_CMD			"red"
+#define RED_API 		"GET /ampel/"RED_CMD
+#define RED_LED 		1
 #define RED_PIN 		GPIO_ID_PIN(13)
 #define RED_MUX 		PERIPHS_IO_MUX_MTCK_U
 #define RED_FUN 		FUNC_GPIO13
 
-#define YELLOW_API 		"GET /ampel/yellow"
-#define YELLOW_LED 		5
+#define YELLOW_CMD		"yellow"
+#define YELLOW_API 		"GET /ampel/"YELLOW_CMD
+#define YELLOW_LED 		2
 #define YELLOW_PIN 		GPIO_ID_PIN(12)
 #define YELLOW_MUX 		PERIPHS_IO_MUX_MTDI_U
 #define YELLOW_FUN		FUNC_GPIO12
 
-#define GREEN_API 		"GET /ampel/green"
-#define GREEN_LED 		3
+#define GREEN_CMD 		"green"
+#define GREEN_API 		"GET /ampel/"GREEN_CMD
+#define GREEN_LED 		4
 #define GREEN_PIN 		GPIO_ID_PIN(14)
 #define GREEN_MUX 		PERIPHS_IO_MUX_MTMS_U
 #define GREEN_FUN		FUNC_GPIO14
 
 #define API_OFF 		"GET /ampel/off"
-#define LED_OFF 		7
+#define LED_OFF 		0
 
 #define API_ON 			"GET /ampel/on"
-#define LED_ON 			0
+#define LED_ON 			255
 
+static void ICACHE_FLASH_ATTR set_led(uint8_t cmd);
+static void ICACHE_FLASH_ATTR check_status(void *arg);
 
-static void ICACHE_FLASH_ATTR wifiConnectCb(uint8_t status) {
-	if (status == STATION_GOT_IP) {
-		INFO("Connected to AP.\r\n");
-	} else if (status == STATION_WRONG_PASSWORD || status == STATION_NO_AP_FOUND || status == STATION_CONNECT_FAIL) {
-		INFO("Error connecting to AP.\r\n");
-	} else {
-		INFO("Connecting to AP.\r\n");
-	}
+void ICACHE_FLASH_ATTR signalAppDisconnected() {
+	INFO("AP disconnected.\r\n");
+	set_led(RED_LED + YELLOW_LED);
+}
+void ICACHE_FLASH_ATTR signalClear() {
+	INFO("Ready to go.\r\n");
+	set_led(LED_OFF);
+}
+void ICACHE_FLASH_ATTR signalAppConnecting() {
+	INFO("Connecting AP.\r\n");
+	set_led(GREEN_LED + YELLOW_LED);
 }
 
 //Timer event.
@@ -62,6 +72,26 @@ static void ICACHE_FLASH_ATTR reboot(void *arg) {
 	system_restart();
 }
 
+static void ICACHE_FLASH_ATTR wifiConnectCb(uint8_t status) {
+	if (status == STATION_GOT_IP) {
+		signalClear();
+
+		os_timer_setfn(&wait_timer, (os_timer_func_t *) check_status, NULL);
+		os_timer_disarm(&wait_timer);
+		os_timer_arm(&wait_timer, 1000, 0);
+
+	} else if (status == STATION_WRONG_PASSWORD || status == STATION_NO_AP_FOUND || status == STATION_CONNECT_FAIL) {
+		signalAppDisconnected();
+		CFG_Reset();
+
+		os_timer_setfn(&wait_timer, (os_timer_func_t *) reboot, NULL);
+		os_timer_disarm(&wait_timer);
+		os_timer_arm(&wait_timer, 3000, 0);
+	} else {
+		signalAppConnecting();
+
+	}
+}
 
 /******************************************************************************
  * FunctionName : data_send
@@ -110,57 +140,75 @@ static void ICACHE_FLASH_ATTR status_send(void *arg, bool responseOK) {
 	data_send(arg, responseOK, NULL);
 }
 
-
 static void ICACHE_FLASH_ATTR set_led(uint8_t cmd) {
-	INFO("[%s] Red (PIN %d)\r\n",    ((cmd & 1) == 0)?"x":" ", RED_PIN);
-	INFO("[%s] Yellow (PIN %d)\r\n", ((cmd & 2) == 0)?"x":" ", YELLOW_PIN);
-	INFO("[%s] Green (PIN %d)\r\n",  ((cmd & 4) == 0)?"x":" ", GREEN_PIN);
+	uint8_t r = 1 - (cmd & RED_LED);
+	uint8_t y = 1 - ((cmd & YELLOW_LED) >> 1);
+	uint8_t g = 1 - ((cmd & GREEN_LED) >> 2);
 
-	uint8_t bit = cmd & 1;
+	INFO("[%s] %s (PIN %d)\r\n", (r == 0) ? "x" : " ", RED_CMD, RED_PIN);
+	INFO("[%s] %s (PIN %d)\r\n", (y == 0) ? "x" : " ", YELLOW_CMD, YELLOW_PIN);
+	INFO("[%s] %s (PIN %d)\r\n", (g == 0) ? "x" : " ", GREEN_CMD, GREEN_PIN);
 
-	INFO("RED = %d\r\n", bit);
-	GPIO_OUTPUT_SET(RED_PIN, bit);
-
-	cmd = cmd >> 1;
-	bit = cmd & 1;
-
-	INFO("YELLOW = %d\r\n", bit);
-	GPIO_OUTPUT_SET(YELLOW_PIN, bit);
-
-	cmd = cmd >> 1;
-	bit = cmd & 1;
-
-	INFO("GREEN = %d\r\n", bit);
-	GPIO_OUTPUT_SET(GREEN_PIN, bit);
+	GPIO_OUTPUT_SET(RED_PIN, r);
+	GPIO_OUTPUT_SET(YELLOW_PIN, y);
+	GPIO_OUTPUT_SET(GREEN_PIN, g);
 }
 
+static void ICACHE_FLASH_ATTR http_callback_health(char * response, int http_status, char * full_response) {
+	if (http_status != 200) {
+		set_led(RED_LED);
+		INFO("%s\r\n", response);
+	} else {
+		INFO("status: %d\r\n", http_status);
+		if (http_status == 200) {
+			//determine status (green,yellow,red)
+			if (strncmp(response, RED_CMD, strlen(RED_CMD)) == 0) {
+				set_led(RED_LED);
+			} else if (strncmp(response, GREEN_CMD, strlen(GREEN_CMD)) == 0) {
+				set_led(GREEN_LED);
+			} else {
+				set_led(YELLOW_LED);
+			}
+		}
+	}
+
+	os_timer_setfn(&wait_timer, (os_timer_func_t *) check_status, NULL);
+	os_timer_disarm(&wait_timer);
+	os_timer_arm(&wait_timer, TASK_WAIT, 0);
+}
+
+//Timer event.
+static void ICACHE_FLASH_ATTR check_status(void *arg) {
+	INFO("Calling status from %s.\r\n", STATUS_ENDPOINT);
+	http_get(STATUS_ENDPOINT, "", http_callback_health);
+}
 
 //Called when new packet comes in.
 static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 len) {
 	INFO("Received data.\r\n");
 	INFO("%s\r\n", pusrdata);
 
-	if(len >= os_strlen(RED_API) && strncmp((const char *) pusrdata, RED_API, strlen(RED_API)) == 0) {
+	if (len >= os_strlen(RED_API) && strncmp((const char *) pusrdata, RED_API, strlen(RED_API)) == 0) {
 		INFO("Set red color.\r\n");
 		set_led(RED_LED);
 		data_send(arg, true, NULL);
-	} else if(len >= os_strlen(YELLOW_API) && strncmp((const char *) pusrdata, YELLOW_API, strlen(YELLOW_API)) == 0) {
+	} else if (len >= os_strlen(YELLOW_API) && strncmp((const char *) pusrdata, YELLOW_API, strlen(YELLOW_API)) == 0) {
 		INFO("Set yellow color.\r\n");
 		set_led(YELLOW_LED);
 		data_send(arg, true, NULL);
-	} else if(len >= os_strlen(GREEN_API) && strncmp((const char *) pusrdata, GREEN_API, strlen(GREEN_API)) == 0) {
+	} else if (len >= os_strlen(GREEN_API) && strncmp((const char *) pusrdata, GREEN_API, strlen(GREEN_API)) == 0) {
 		INFO("Set green color.\r\n");
 		set_led(GREEN_LED);
 		data_send(arg, true, NULL);
-	} else if(len >= os_strlen(API_OFF) && strncmp((const char *) pusrdata, API_OFF, strlen(API_OFF)) == 0) {
+	} else if (len >= os_strlen(API_OFF) && strncmp((const char *) pusrdata, API_OFF, strlen(API_OFF)) == 0) {
 		INFO("Set no color.\r\n");
 		set_led(LED_OFF);
 		data_send(arg, true, NULL);
-	} else if(len >= os_strlen(API_ON) && strncmp((const char *) pusrdata, API_ON, strlen(API_ON)) == 0) {
-			INFO("Set all colors.\r\n");
-			set_led(LED_ON);
-			data_send(arg, true, NULL);
-	} else 	if (len >= os_strlen(INDEX_PAGE) && strncmp((const char *) pusrdata, INDEX_PAGE, strlen(INDEX_PAGE)) == 0) {
+	} else if (len >= os_strlen(API_ON) && strncmp((const char *) pusrdata, API_ON, strlen(API_ON)) == 0) {
+		INFO("Set all colors.\r\n");
+		set_led(LED_ON);
+		data_send(arg, true, NULL);
+	} else if (len >= os_strlen(INDEX_PAGE) && strncmp((const char *) pusrdata, INDEX_PAGE, strlen(INDEX_PAGE)) == 0) {
 		INFO("Send index page.\r\n");
 		data_send(arg, true, INDEX_CONTENT);
 	} else if (len >= os_strlen(SET_PAGE) && strncmp((const char *) pusrdata, SET_PAGE, strlen(SET_PAGE)) == 0) {
@@ -206,7 +254,7 @@ static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 
 						status_send(arg, false);
 						return;
 					}
-					os_strncpy(ssid, (const char * )&(payload[v_start]), pos - v_start);
+					os_strncpy(ssid, (const char *) &(payload[v_start]), pos - v_start);
 					ssid[31] = '\0';
 					DEBUG("SSID: %s\r\n", ssid);
 				} else if (type == 2) {
@@ -216,7 +264,7 @@ static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 
 						status_send(arg, false);
 						return;
 					}
-					os_strncpy(psk, (const char * )&(payload[v_start]), pos - v_start);
+					os_strncpy(psk, (const char *) &(payload[v_start]), pos - v_start);
 					psk[31] = '\0';
 					DEBUG("PSK: %s\r\n", psk);
 				} else {
@@ -236,7 +284,7 @@ static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 
 					status_send(arg, false);
 					return;
 				}
-				os_strncpy(ssid, (const char * )&(payload[v_start]), pos - v_start);
+				os_strncpy(ssid, (const char *) &(payload[v_start]), pos - v_start);
 				ssid[31] = '\0';
 				INFO("SSID: %s\r\n", ssid);
 			} else if (type == 2) {
@@ -246,7 +294,7 @@ static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 
 					status_send(arg, false);
 					return;
 				}
-				os_strncpy(psk, (const char * )&(payload[v_start]), pos - v_start);
+				os_strncpy(psk, (const char *) &(payload[v_start]), pos - v_start);
 				psk[31] = '\0';
 				INFO("PSK: %s\r\n", psk);
 			} else {
@@ -275,7 +323,6 @@ static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 
 		os_free(ssid);
 		os_free(psk);
 
-
 		os_timer_setfn(&wait_timer, (os_timer_func_t *) reboot, NULL);
 		os_timer_disarm(&wait_timer);
 		os_timer_arm(&wait_timer, 3000, 0);
@@ -285,6 +332,9 @@ static void ICACHE_FLASH_ATTR httpserver_recv(void *arg, char *pusrdata, uint16 
 }
 
 static void ICACHE_FLASH_ATTR app_init(void) {
+}
+
+static void ICACHE_FLASH_ATTR config_init(void) {
 	httpServer_init(httpserver_recv);
 }
 
@@ -292,8 +342,6 @@ static void ICACHE_FLASH_ATTR led_init(void) {
 	PIN_FUNC_SELECT(RED_MUX, RED_FUN);
 	PIN_FUNC_SELECT(YELLOW_MUX, YELLOW_FUN);
 	PIN_FUNC_SELECT(GREEN_MUX, GREEN_FUN);
-
-
 }
 
 void user_init(void) {
@@ -303,9 +351,11 @@ void user_init(void) {
 	if (CFG_Load()) {
 		INFO("Config loaded.\r\n");
 		WIFI_Connect(sysCfg.sta_ssid, sysCfg.sta_pwd, wifiConnectCb);
+		system_init_done_cb(app_init);
 	} else {
 		INFO("No config found.\r\n");
+		set_led(RED_LED + YELLOW_LED + GREEN_LED);
 		WIFI_AP();
+		system_init_done_cb(config_init);
 	}
-	system_init_done_cb(app_init);
 }

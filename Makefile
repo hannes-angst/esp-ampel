@@ -6,6 +6,7 @@
 #
 # (c) by CHERTS <sleuthhound@gmail.com>
 #
+# Altered to fit by Hannes Angst
 #############################################################
 
 BUILD_BASE	= build
@@ -167,11 +168,11 @@ endif
 TARGET = app
 
 # which modules (subdirectories) of the project to include in compiling
-MODULES	= user modules/app_config modules/httpServer modules/wifi modules/info
+MODULES	= user modules/app_config modules/httpServer modules/wifi modules/info modules/httpClient
 EXTRA_INCDIR = include $(SDK_BASE)/../extra/include
 
 # libraries used in this project, mainly provided by the SDK
-LIBS = c gcc hal phy pp net80211 lwip wpa crypto main ssl
+LIBS = c gcc hal phy pp net80211 lwip wpa ssl crypto main driver
 
 # compiler flags using during compilation of source files
 CFLAGS = -Os -g -O2 -std=gnu90 -Wpointer-arith -Wundef -Werror -Wl,-EL -fno-inline-functions -nostdlib -mlongcalls -mtext-section-literals -mno-serialize-volatile -D__ets__ -DICACHE_FLASH
@@ -266,7 +267,6 @@ all: checkdirs $(TARGET_OUT)
 
 $(TARGET_OUT): $(APP_AR)
 	$(vecho) "LD $@"
-
 	$(Q) $(LD) -L$(SDK_LIBDIR) $(LD_SCRIPT) $(LDFLAGS) -Wl,--start-group $(LIBS) $(APP_AR) -Wl,--end-group -o $@
 	$(vecho) "Run objcopy, please wait..."
 	$(Q) $(OBJCOPY) --only-section .text -O binary $@ eagle.app.v6.text.bin
