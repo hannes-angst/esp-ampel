@@ -73,7 +73,7 @@ and display its status.
 # Next steps
 - Integrate push button from hardware
 - Implement transitions, for example from red to green: (1) red, (2) yellow+red, (3) green
-- Integrate a proper OFF switch for conversing battery
+- Integrate a proper OFF switch for conserving battery
 - Find a new supplier for the traffic sign hardware. The one referenced has discontinued the product
 
 # Power Consumption
