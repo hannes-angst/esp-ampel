@@ -24,7 +24,7 @@ static os_timer_t wait_timer;
 
 #define RED_CMD			"red"
 #define RED_API 		"GET /ampel/"RED_CMD
-#define RED_LED 		1
+#define RED_LED 		4
 #define RED_PIN 		GPIO_ID_PIN(13)
 #define RED_MUX 		PERIPHS_IO_MUX_MTCK_U
 #define RED_FUN 		FUNC_GPIO13
@@ -38,7 +38,7 @@ static os_timer_t wait_timer;
 
 #define GREEN_CMD 		"green"
 #define GREEN_API 		"GET /ampel/"GREEN_CMD
-#define GREEN_LED 		4
+#define GREEN_LED 		1
 #define GREEN_PIN 		GPIO_ID_PIN(14)
 #define GREEN_MUX 		PERIPHS_IO_MUX_MTMS_U
 #define GREEN_FUN		FUNC_GPIO14
@@ -141,9 +141,9 @@ static void ICACHE_FLASH_ATTR status_send(void *arg, bool responseOK) {
 }
 
 static void ICACHE_FLASH_ATTR set_led(uint8_t cmd) {
-	uint8_t r = 1 - (cmd & RED_LED);
+	uint8_t r = 1 - ((cmd & RED_LED) >> 2);
 	uint8_t y = 1 - ((cmd & YELLOW_LED) >> 1);
-	uint8_t g = 1 - ((cmd & GREEN_LED) >> 2);
+	uint8_t g = 1 - (cmd & GREEN_LED);
 
 	INFO("[%s] %s (PIN %d)\r\n", (r == 0) ? "x" : " ", RED_CMD, RED_PIN);
 	INFO("[%s] %s (PIN %d)\r\n", (y == 0) ? "x" : " ", YELLOW_CMD, YELLOW_PIN);

@@ -3,7 +3,7 @@
 
 
 
-#define CFG_HOLDER		0x00FF55B1
+#define CFG_HOLDER		0x00FF55B2
 #define CFG_LOCATION	0x79
 
 
